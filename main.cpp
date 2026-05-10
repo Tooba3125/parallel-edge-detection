@@ -7,289 +7,304 @@
 #include <iomanip>
 #include <chrono>
 #include <vector>
+#include <algorithm>
 
 using namespace std;
 
 // Structure to store test results
 struct SpeedupData {
     string test_name;
+    int threads;
+    double sobel_time_ms;
+    double canny_time_ms;
     double sobel_speedup;
     double canny_speedup;
 };
 
-// Function to check if file exists
-bool fileExists(const string& filename) {
-    ifstream f(filename.c_str());
-    return f.good();
-}
+struct BenchmarkResults {
+    string image_name;
+    int width;
+    int height;
+    vector<SpeedupData> results;
+};
 
 void printHeader() {
     cout << "\n========================================" << endl;
-    cout << "  PARALLEL EDGE DETECTION FRAMEWORK" << endl;
+    cout << "  PARALLEL EDGE DETECTION BENCHMARK" << endl;
     cout << "========================================" << endl;
 }
 
-void showMenu() {
-    cout << "\n========================================" << endl;
-    cout << "           MAIN MENU" << endl;
-    cout << "========================================" << endl;
-    cout << "  1. Process Single Image" << endl;
-    cout << "     - Small (400x300)" << endl;
-    cout << "     - Medium (1080x720)" << endl;
-    cout << "     - Large (1920x1080)" << endl;
-    cout << "     - Custom image" << endl;
-    cout << endl;
-    cout << "  2. Run All Test Cases with Comparison" << endl;
-    cout << "     (Shows Serial vs Parallel speedup)" << endl;
-    cout << endl;
-    cout << "  3. Exit" << endl;
-    cout << "========================================" << endl;
-    cout << "Choice: ";
-}
-
-double printComparisonTable(const string& image_name, int width, int height, 
-                          int serial_sobel, int parallel_sobel,
-                          int serial_canny, int parallel_canny) {
+void printComparisonTable(int threads, const string& image_name, int width, int height, 
+                          double serial_sobel, double parallel_sobel,
+                          double serial_canny, double parallel_canny) {
     cout << "\n========================================" << endl;
     cout << "  " << image_name << " (" << width << "x" << height << ")" << endl;
+    cout << "  Threads: " << threads << endl;
     cout << "========================================" << endl;
-    cout << endl;
     
     // Table header
     cout << left << setw(15) << "Algorithm" 
-         << right << setw(18) << "Serial (1 thread)" 
-         << right << setw(18) << "Parallel (2 threads)" 
+         << right << setw(22) << "Serial (1 thread)" 
+         << right << setw(22) << ("Parallel (" + to_string(threads) + " threads)")
          << right << setw(12) << "Speedup" << endl;
-    cout << "--------------------------------------------------------------" << endl;
+    cout << "--------------------------------------------------------------------------------" << endl;
     
     // Sobel row
-    double sobel_speedup = (double)serial_sobel / parallel_sobel;
+    double sobel_speedup = (parallel_sobel > 0) ? serial_sobel / parallel_sobel : 0;
     cout << left << setw(15) << "Sobel" 
-         << right << setw(18) << to_string(serial_sobel) + " ms"
-         << right << setw(18) << to_string(parallel_sobel) + " ms"
+         << right << setw(22) << fixed << setprecision(4) << serial_sobel << " ms"
+         << right << setw(22) << fixed << setprecision(4) << parallel_sobel << " ms"
          << right << setw(12) << fixed << setprecision(2) << sobel_speedup << "x" << endl;
     
     // Canny row
-    double canny_speedup = (double)serial_canny / parallel_canny;
+    double canny_speedup = (parallel_canny > 0) ? serial_canny / parallel_canny : 0;
     cout << left << setw(15) << "Canny" 
-         << right << setw(18) << to_string(serial_canny) + " ms"
-         << right << setw(18) << to_string(parallel_canny) + " ms"
+         << right << setw(22) << fixed << setprecision(4) << serial_canny << " ms"
+         << right << setw(22) << fixed << setprecision(4) << parallel_canny << " ms"
          << right << setw(12) << fixed << setprecision(2) << canny_speedup << "x" << endl;
     
-    cout << "--------------------------------------------------------------" << endl;
-    cout << "\nResults saved: results/" << image_name << "_*.png" << endl;
-    
-    // Return the speedup values for summary
-    return sobel_speedup;
+    cout << "--------------------------------------------------------------------------------" << endl;
 }
 
-void runSingleImageComparison(EdgeDetector& serial_detector, EdgeDetector& parallel_detector, 
-                              const string& image_path, const string& image_name, 
-                              int width, int height, double& sobel_speedup, double& canny_speedup) {
+void runBenchmarkForThreads(EdgeDetector& serial_detector, 
+                           const string& image_path, const string& image_name, 
+                           int width, int height, 
+                           const vector<int>& thread_counts,
+                           BenchmarkResults& benchmark) {
     
-    // Serial execution (1 thread)
-    serial_detector.loadImage(image_path);
+    benchmark.image_name = image_name;
+    benchmark.width = width;
+    benchmark.height = height;
     
-    // Run Sobel serial
-    auto start = chrono::high_resolution_clock::now();
-    Image serial_sobel = serial_detector.sobelEdgeDetection();
-    auto end = chrono::high_resolution_clock::now();
-    int serial_sobel_time = chrono::duration_cast<chrono::milliseconds>(end - start).count();
+    // First, get serial execution times (1 thread)
+    cout << "\n>>> Running serial benchmark (1 thread) for " << image_name << "..." << endl;
     
-    // Run Canny serial
-    start = chrono::high_resolution_clock::now();
-    Image serial_canny = serial_detector.cannyEdgeDetection();
-    end = chrono::high_resolution_clock::now();
-    int serial_canny_time = chrono::duration_cast<chrono::milliseconds>(end - start).count();
-    
-    // Save serial results
-    serial_detector.saveResult("results/" + image_name + "_serial_sobel.png", serial_sobel);
-    serial_detector.saveResult("results/" + image_name + "_serial_canny.png", serial_canny);
-    
-    // Parallel execution (2 threads)
-    parallel_detector.loadImage(image_path);
-    
-    // Run Sobel parallel
-    start = chrono::high_resolution_clock::now();
-    Image parallel_sobel = parallel_detector.sobelEdgeDetection();
-    end = chrono::high_resolution_clock::now();
-    int parallel_sobel_time = chrono::duration_cast<chrono::milliseconds>(end - start).count();
-    
-    // Run Canny parallel
-    start = chrono::high_resolution_clock::now();
-    Image parallel_canny = parallel_detector.cannyEdgeDetection();
-    end = chrono::high_resolution_clock::now();
-    int parallel_canny_time = chrono::duration_cast<chrono::milliseconds>(end - start).count();
-    
-    // Save parallel results
-    parallel_detector.saveResult("results/" + image_name + "_parallel_sobel.png", parallel_sobel);
-    parallel_detector.saveResult("results/" + image_name + "_parallel_canny.png", parallel_canny);
-    
-    // Calculate speedups
-    sobel_speedup = (double)serial_sobel_time / parallel_sobel_time;
-    canny_speedup = (double)serial_canny_time / parallel_canny_time;
-    
-    // Print comparison table
-    printComparisonTable(image_name, width, height, 
-                         serial_sobel_time, parallel_sobel_time,
-                         serial_canny_time, parallel_canny_time);
-}
-
-void processSingleImage(EdgeDetector& serial_detector, EdgeDetector& parallel_detector) {
-    int imgChoice;
-    string image_path;
-    string image_name;
-    int width, height;
-    double sobel_speedup, canny_speedup;
-    
-    cout << "\n--- Select Image Size ---" << endl;
-    cout << "1. Small (400x300)" << endl;
-    cout << "2. Medium (1080x720)" << endl;
-    cout << "3. Large (1920x1080)" << endl;
-    cout << "Choice: ";
-    cin >> imgChoice;
-    
-    switch(imgChoice) {
-        case 1:
-            image_path = "test_images/small.png";
-            image_name = "small";
-            width = 400;
-            height = 300;
-            break;
-        case 2:
-            image_path = "test_images/medium.png";
-            image_name = "medium";
-            width = 1080;
-            height = 720;
-            break;
-        case 3:
-            image_path = "test_images/large.png";
-            image_name = "large";
-            width = 1920;
-            height = 1080;
-            break;
-        default:
-            cout << "Invalid choice!" << endl;
-            return;
+    if (!serial_detector.loadImage(image_path)) {
+        cerr << "Error: Failed to load image " << image_path << endl;
+        return;
     }
     
-    cout << "\n========================================" << endl;
-    cout << "Processing: " << image_name << endl;
-    cout << "========================================" << endl;
+    // Use microseconds for higher precision
+    const int NUM_RUNS = 3;
+    double serial_sobel_times = 0;
+    double serial_canny_times = 0;
     
-    runSingleImageComparison(serial_detector, parallel_detector, 
-                             image_path, image_name, width, height, 
-                             sobel_speedup, canny_speedup);
-}
-
-void runAllTestCases(EdgeDetector& serial_detector, EdgeDetector& parallel_detector) {
-    cout << "\n========================================" << endl;
-    cout << "RUNNING ALL TEST CASES WITH COMPARISON" << endl;
-    cout << "Serial vs Parallel" << endl;
-    cout << "========================================" << endl;
-    
-    // Store results for summary
-    vector<SpeedupData> results;
-    
-    // Test Case 1: Small Image
-    cout << "\n>>> TEST CASE 1: Small Image (400x300) <<<" << endl;
-    double small_sobel, small_canny;
-    runSingleImageComparison(serial_detector, parallel_detector, 
-                            "test_images/small.png", "test1_small", 400, 300,
-                            small_sobel, small_canny);
-    results.push_back({"Small (400x300)", small_sobel, small_canny});
-    
-    // Test Case 2: Medium Image
-    cout << "\n>>> TEST CASE 2: Medium Image (1080x720) <<<" << endl;
-    double medium_sobel, medium_canny;
-    runSingleImageComparison(serial_detector, parallel_detector, 
-                            "test_images/medium.png", "test2_medium", 1080, 720,
-                            medium_sobel, medium_canny);
-    results.push_back({"Medium (1080x720)", medium_sobel, medium_canny});
-    
-    // Test Case 3: Large Image
-    cout << "\n>>> TEST CASE 3: Large Image (1920x1080) <<<" << endl;
-    double large_sobel, large_canny;
-    runSingleImageComparison(serial_detector, parallel_detector, 
-                            "test_images/large.png", "test3_large", 1920, 1080,
-                            large_sobel, large_canny);
-    results.push_back({"Large (1920x1080)", large_sobel, large_canny});
-    
-    cout << "\n========================================" << endl;
-    cout << "ALL TEST CASES COMPLETE" << endl;
-    cout << "Results saved in results/ folder" << endl;
-    cout << "========================================" << endl;
-    
-    // Summary table with actual values
-    cout << "\n========================================" << endl;
-    cout << "SUMMARY: SPEEDUP COMPARISON" << endl;
-    cout << "========================================" << endl;
-    cout << left << setw(22) << "Test Case" 
-         << right << setw(12) << "Sobel" 
-         << right << setw(12) << "Canny" << endl;
-    cout << "----------------------------------------" << endl;
-    
-    for (const auto& r : results) {
-        cout << left << setw(22) << r.test_name 
-             << right << setw(12) << fixed << setprecision(2) << r.sobel_speedup << "x"
-             << right << setw(12) << fixed << setprecision(2) << r.canny_speedup << "x" << endl;
+    for (int run = 0; run < NUM_RUNS; run++) {
+        auto start = chrono::high_resolution_clock::now();
+        Image serial_sobel = serial_detector.sobelEdgeDetection();
+        auto end = chrono::high_resolution_clock::now();
+        serial_sobel_times += chrono::duration_cast<chrono::duration<double, milli>>(end - start).count();
+        
+        start = chrono::high_resolution_clock::now();
+        Image serial_canny = serial_detector.cannyEdgeDetection();
+        end = chrono::high_resolution_clock::now();
+        serial_canny_times += chrono::duration_cast<chrono::duration<double, milli>>(end - start).count();
     }
     
-    cout << "========================================" << endl;
+    double avg_serial_sobel = serial_sobel_times / NUM_RUNS;
+    double avg_serial_canny = serial_canny_times / NUM_RUNS;
+    
+    // Save serial results once
+    Image serial_sobel_result = serial_detector.sobelEdgeDetection();
+    Image serial_canny_result = serial_detector.cannyEdgeDetection();
+    serial_detector.saveResult("results/" + image_name + "_serial_sobel.png", serial_sobel_result);
+    serial_detector.saveResult("results/" + image_name + "_serial_canny.png", serial_canny_result);
+    
+    // Now run for each thread count
+    for (int threads : thread_counts) {
+        if (threads == 1) continue; // Skip serial as we already did it
+        
+        cout << ">>> Running benchmark with " << threads << " threads for " << image_name << "..." << endl;
+        
+        EdgeDetector parallel_detector(threads);
+        
+        if (!parallel_detector.loadImage(image_path)) {
+            cerr << "Error: Failed to load image " << image_path << " for " << threads << " threads" << endl;
+            continue;
+        }
+        
+        // Run Sobel parallel (multiple runs)
+        double parallel_sobel_times = 0;
+        double parallel_canny_times = 0;
+        
+        for (int run = 0; run < NUM_RUNS; run++) {
+            auto start = chrono::high_resolution_clock::now();
+            Image parallel_sobel = parallel_detector.sobelEdgeDetection();
+            auto end = chrono::high_resolution_clock::now();
+            parallel_sobel_times += chrono::duration_cast<chrono::duration<double, milli>>(end - start).count();
+            
+            start = chrono::high_resolution_clock::now();
+            Image parallel_canny = parallel_detector.cannyEdgeDetection();
+            end = chrono::high_resolution_clock::now();
+            parallel_canny_times += chrono::duration_cast<chrono::duration<double, milli>>(end - start).count();
+        }
+        
+        double avg_parallel_sobel = parallel_sobel_times / NUM_RUNS;
+        double avg_parallel_canny = parallel_canny_times / NUM_RUNS;
+        
+        // Save parallel results for selected thread counts
+        if (threads == 4 || threads == 8) {
+            Image parallel_sobel_result = parallel_detector.sobelEdgeDetection();
+            Image parallel_canny_result = parallel_detector.cannyEdgeDetection();
+            parallel_detector.saveResult("results/" + image_name + "_parallel_" + to_string(threads) + "threads_sobel.png", parallel_sobel_result);
+            parallel_detector.saveResult("results/" + image_name + "_parallel_" + to_string(threads) + "threads_canny.png", parallel_canny_result);
+        }
+        
+        // Store results
+        SpeedupData data;
+        data.test_name = image_name;
+        data.threads = threads;
+        data.sobel_time_ms = avg_parallel_sobel;
+        data.canny_time_ms = avg_parallel_canny;
+        data.sobel_speedup = avg_serial_sobel / avg_parallel_sobel;
+        data.canny_speedup = avg_serial_canny / avg_parallel_canny;
+        benchmark.results.push_back(data);
+        
+        // Print individual comparison table
+        printComparisonTable(threads, image_name, width, height, 
+                           avg_serial_sobel, avg_parallel_sobel,
+                           avg_serial_canny, avg_parallel_canny);
+    }
+    
+    // Store serial baseline as threads=1
+    SpeedupData serial_data;
+    serial_data.test_name = image_name;
+    serial_data.threads = 1;
+    serial_data.sobel_time_ms = avg_serial_sobel;
+    serial_data.canny_time_ms = avg_serial_canny;
+    serial_data.sobel_speedup = 1.0;
+    serial_data.canny_speedup = 1.0;
+    benchmark.results.insert(benchmark.results.begin(), serial_data);
 }
 
-int main(int argc, char* argv[]) {
+void printFullSummary(const vector<BenchmarkResults>& all_benchmarks) {
+    cout << "\n\n";
+    cout << "################################################################################\n";
+    cout << "                    COMPLETE BENCHMARK SUMMARY\n";
+    cout << "################################################################################\n";
+    
+    for (const auto& benchmark : all_benchmarks) {
+        cout << "\n========================================\n";
+        cout << "Image: " << benchmark.image_name << " (" << benchmark.width << "x" << benchmark.height << ")\n";
+        cout << "========================================\n";
+        
+        cout << left << setw(12) << "Threads"
+             << right << setw(20) << "Sobel (ms)"
+             << right << setw(20) << "Sobel Speedup"
+             << right << setw(20) << "Canny (ms)"
+             << right << setw(20) << "Canny Speedup" << endl;
+        cout << "--------------------------------------------------------------------------------\n";
+        
+        for (const auto& result : benchmark.results) {
+            cout << left << setw(12) << result.threads
+                 << right << setw(20) << fixed << setprecision(4) << result.sobel_time_ms
+                 << right << setw(20) << fixed << setprecision(2) << result.sobel_speedup << "x"
+                 << right << setw(20) << fixed << setprecision(4) << result.canny_time_ms
+                 << right << setw(20) << fixed << setprecision(2) << result.canny_speedup << "x" << endl;
+        }
+        cout << "--------------------------------------------------------------------------------\n";
+    }
+}
+
+void saveResultsToCSV(const vector<BenchmarkResults>& all_benchmarks) {
+    ofstream csv_file("results/benchmark_results.csv");
+    
+    if (!csv_file.is_open()) {
+        cerr << "Warning: Could not create CSV file" << endl;
+        return;
+    }
+    
+    // Write header
+    csv_file << "Image,Width,Height,Threads,Sobel_Time_ms,Sobel_Speedup,Canny_Time_ms,Canny_Speedup\n";
+    
+    // Write data with high precision
+    csv_file << fixed << setprecision(6);
+    for (const auto& benchmark : all_benchmarks) {
+        for (const auto& result : benchmark.results) {
+            csv_file << benchmark.image_name << ","
+                    << benchmark.width << ","
+                    << benchmark.height << ","
+                    << result.threads << ","
+                    << result.sobel_time_ms << ","
+                    << result.sobel_speedup << ","
+                    << result.canny_time_ms << ","
+                    << result.canny_speedup << "\n";
+        }
+    }
+    
+    csv_file.close();
+    cout << "\n✓ Results saved to results/benchmark_results.csv" << endl;
+}
+
+int main() {
     printHeader();
     
-    // Get number of threads from command line (default: 2 for parallel)
-    int threads = 2;
-    if (argc > 1) threads = atoi(argv[1]);
+    // Define thread counts to benchmark
+    vector<int> thread_counts = {1, 2, 4, 6, 8, 10};
     
-    cout << "\nConfiguration:" << endl;
-    cout << "   Parallel will use: " << threads << " threads" << endl;
-    cout << "   Serial will use: 1 thread" << endl;
+    cout << "\nBenchmark Configuration:" << endl;
+    cout << "   Thread counts to test: ";
+    for (size_t i = 0; i < thread_counts.size(); i++) {
+        cout << thread_counts[i];
+        if (i < thread_counts.size() - 1) cout << ", ";
+    }
+    cout << endl;
+    cout << "   Each test will run 3 times for accuracy" << endl;
+    cout << "   Results will be averaged with microsecond precision" << endl;
+    cout << "   Times are displayed in milliseconds (4 decimal places)" << endl;
     
-    // Create results directory
-    system("mkdir -p results");
-    
-    // Create detectors (serial with 1 thread, parallel with user threads)
+    // Create serial detector (1 thread) for baseline
     EdgeDetector serial_detector(1);
-    EdgeDetector parallel_detector(threads);
     
-    // Command line mode: if user provided image directly
-    if (argc > 2) {
-        string image_file = argv[2];
-        string image_name = "custom";
-        double dummy1, dummy2;
-        if (image_file.find("small") != string::npos) image_name = "small";
-        else if (image_file.find("medium") != string::npos) image_name = "medium";
-        else if (image_file.find("large") != string::npos) image_name = "large";
+    // Define test images
+    vector<tuple<string, string, int, int>> test_images = {
+        {"test_images/small.png", "small", 400, 300},
+        {"test_images/medium.png", "medium", 1080, 720},
+        {"test_images/large.png", "large", 1920, 1080}
+    };
+    
+    vector<BenchmarkResults> all_benchmarks;
+    
+    // Run benchmarks for each image
+    for (const auto& img : test_images) {
+        string image_path = get<0>(img);
+        string image_name = get<1>(img);
+        int width = get<2>(img);
+        int height = get<3>(img);
         
-        runSingleImageComparison(serial_detector, parallel_detector, 
-                                 image_file, image_name, 0, 0, dummy1, dummy2);
-        return 0;
+        // Check if image exists
+        ifstream f(image_path.c_str());
+        if (!f.good()) {
+            cout << "\n⚠ Warning: " << image_path << " not found. Skipping..." << endl;
+            continue;
+        }
+        f.close();
+        
+        BenchmarkResults benchmark;
+        runBenchmarkForThreads(serial_detector, image_path, image_name, 
+                              width, height, thread_counts, benchmark);
+        all_benchmarks.push_back(benchmark);
     }
     
-    // Interactive mode
-    int choice;
-    do {
-        showMenu();
-        cin >> choice;
-        
-        switch(choice) {
-            case 1:
-                processSingleImage(serial_detector, parallel_detector);
-                break;
-            case 2:
-                runAllTestCases(serial_detector, parallel_detector);
-                break;
-            case 3:
-                cout << "\n Exiting... Thank you for using Parallel Edge Detection!" << endl;
-                break;
-            default:
-                cout << "Invalid choice! Please enter 1-3" << endl;
-        }
-    } while (choice != 3);
+    if (all_benchmarks.empty()) {
+        cout << "\n❌ No test images found! Please run: bash get_test_images.sh" << endl;
+        return 1;
+    }
+    
+    // Print complete summary
+    printFullSummary(all_benchmarks);
+    
+    // Save results to CSV for further analysis
+    saveResultsToCSV(all_benchmarks);
+    
+    cout << "\n========================================" << endl;
+    cout << "BENCHMARK COMPLETE!" << endl;
+    cout << "========================================" << endl;
+    cout << "Results saved in results/ folder" << endl;
+    cout << "  - Images with edge detection results" << endl;
+    cout << "  - benchmark_results.csv for spreadsheet analysis" << endl;
+    cout << "\nYou can now analyze the speedup across different thread counts." << endl;
+    cout << "========================================\n" << endl;
     
     return 0;
 }
